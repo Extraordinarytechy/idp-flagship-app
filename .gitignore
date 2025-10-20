@@ -1,0 +1,33 @@
+# Python virtual environment
+venv/
+env/
+.venv/
+ENV/
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment variables
+.env
+.env.*
+
+# IDE and editor configuration
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Testing artifacts
+.pytest_cache/
+.coverage
+
+# OS-specific files
+.DS_Store
+Thumbs.db

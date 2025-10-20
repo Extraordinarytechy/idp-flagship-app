@@ -1,0 +1,146 @@
+name: Build, Push, and Deploy
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*.*.*'
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  # Manifest path 
+  MANIFESTS_PATH: apps/idp-flagship-app/overlays
+  DEV_OVERLAY: dev
+  PROD_OVERLAY: prod
+  MANIFEST_DEPLOY_FILE: patch-deployment.yaml
+
+jobs:
+  build-and-push-image:
+    name: Build and Push Docker Image
+    runs-on: ubuntu-latest
+    outputs:
+      image_uri: ${{ steps.set-image.outputs.image_uri }}
+
+    steps:
+      - name: Checkout app repository
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU (for multi-arch, optional)
+        uses: docker/setup-qemu-action@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Choose IAM Role ARN
+        id: choose-role
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            echo "role=${{ secrets.GITHUB_ROLE_PROD_ARN }}" >> $GITHUB_OUTPUT
+          else
+            echo "role=${{ secrets.GITHUB_ROLE_DEV_ARN }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ steps.choose-role.outputs.role }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Determine image tag
+        id: image-tag
+        run: |
+          # Use tag for production releases, otherwise use short SHA
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            TAG=${GITHUB_REF#refs/tags/}
+          else
+            TAG=${GITHUB_SHA::7}
+          fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Build and push Docker image
+        id: build-push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ steps.login-ecr.outputs.registry }}/idp-${{ (github.ref == 'refs/heads/main' && 'dev' ) || 'prod' }}-app-repo:${{ steps.image-tag.outputs.tag }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.repository }}
+
+      - name: Set image URI output
+        id: set-image
+        run: |
+          REGISTRY=${{ steps.login-ecr.outputs.registry }}
+          TAG=${{ steps.image-tag.outputs.tag }}
+          IMAGE_URI="${REGISTRY}/idp-${{ (github.ref == 'refs/heads/main' && 'dev' ) || 'prod' }}-app-repo:${TAG}"
+          echo "image_uri=${IMAGE_URI}" >> $GITHUB_OUTPUT
+
+  deploy-dev:
+    name: Update Dev Manifests (GitOps)
+    needs: build-and-push-image
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout manifests repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ secrets.MANIFESTS_REPO }}    
+          token: ${{ secrets.GH_PAT }}
+          path: manifests
+
+      - name: Replace image in dev overlay
+        run: |
+          cd manifests/${{ env.MANIFESTS_PATH }}/${{ env.DEV_OVERLAY }}
+          # Replace placeholder or existing image with new URI
+          if grep -q "<DEV_ECR_IMAGE_URI>" ${MANIFEST_DEPLOY_FILE}; then
+            sed -i "s|<DEV_ECR_IMAGE_URI>|${{ needs.build-and-push-image.outputs.image_uri }}|g" ${MANIFEST_DEPLOY_FILE}
+          else
+            # safe fallback: replace first occurrence of image: line
+            sed -i "0,/image:/s|image:.*|image: ${{ needs.build-and-push-image.outputs.image_uri }}|" ${MANIFEST_DEPLOY_FILE}
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "actions@github.com"
+          git add .
+          git commit -m "ci: update dev image to ${{ needs.build-and-push-image.outputs.image_uri }}" || echo "No changes to commit"
+          git push origin HEAD:main
+
+  deploy-prod:
+    name: Update Prod Manifests (Manual approval required)
+    needs: build-and-push-image
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout manifests repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ secrets.MANIFESTS_REPO }}
+          token: ${{ secrets.GH_PAT }}
+          path: manifests
+
+      - name: Replace image in prod overlay
+        run: |
+          cd manifests/${{ env.MANIFESTS_PATH }}/${{ env.PROD_OVERLAY }}
+          if grep -q "<PROD_ECR_IMAGE_URI>" ${MANIFEST_DEPLOY_FILE}; then
+            sed -i "s|<PROD_ECR_IMAGE_URI>|${{ needs.build-and-push-image.outputs.image_uri }}|g" ${MANIFEST_DEPLOY_FILE}
+          else
+            sed -i "0,/image:/s|image:.*|image: ${{ needs.build-and-push-image.outputs.image_uri }}|" ${MANIFEST_DEPLOY_FILE}
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "actions@github.com"
+          git add .
+          git commit -m "ci: update prod image to ${{ needs.build-and-push-image.outputs.image_uri }}" || echo "No changes to commit"
+          git push origin HEAD:main
