@@ -42,9 +42,9 @@ jobs:
         id: choose-role
         run: |
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
-            echo "role=${{ secrets.GITHUB_ROLE_PROD_ARN }}" >> $GITHUB_OUTPUT
+            echo "role=${{ secrets.AWS_ROLE_DEV_ARN }}" >> $GITHUB_OUTPUT
           else
-            echo "role=${{ secrets.GITHUB_ROLE_DEV_ARN }}" >> $GITHUB_OUTPUT
+            echo "role=${{ secrets.AWS_ROLE_DEV_ARN }}" >> $GITHUB_OUTPUT
           fi
 
       - name: Configure AWS credentials via OIDC
