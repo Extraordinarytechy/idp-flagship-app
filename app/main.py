@@ -14,7 +14,7 @@ app = FastAPI()
 @app.get("/")
 def read_root():
     """
-    Root endpoint for health checks.
+    Root endpoint for health checks and connectivity.
     """
     return {"status": "ok"}
 
