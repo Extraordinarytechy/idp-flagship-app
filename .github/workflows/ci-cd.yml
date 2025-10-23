@@ -19,7 +19,7 @@ env:
   MANIFESTS_PATH: apps/idp-flagship-app/overlays
   DEV_OVERLAY: dev
   PROD_OVERLAY: prod
-  MANIFEST_DEPLOY_FILE: patch-deployment.yaml
+  MANIFEST_DEPLOY_FILE: patch-deployment.yml
 
 jobs:
   build-and-push-image:
